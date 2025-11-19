@@ -1,0 +1,15 @@
+[project]
+name = "kserve-deployer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.40.74",
+    "fastapi[standard]>=0.121.2",
+    "kserve>=0.16.0",
+    "kubernetes>=34.1.0",
+    "pydantic>=2.12.4",
+    "python-dotenv>=1.2.1",
+    "pyyaml>=6.0.3",
+]
