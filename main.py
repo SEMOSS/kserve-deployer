@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.router import router
+from src.config.logging_config import setup_logging
+
+setup_logging()
 
 app = FastAPI(
     title="GovConnect KServe Deployer API",

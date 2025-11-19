@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 class YamlContentUpload(BaseModel):
-    content: str  # The YAML content as a string
+    content: str
 
 
 @router.post("/upload-yaml-content")
@@ -22,7 +22,6 @@ async def upload_deployment_yaml_content(
     The S3 key is automatically extracted from the metadata.name field in the YAML.
     """
     try:
-        # Validate that the content is valid YAML and extract metadata.name
         try:
             deployment_yaml = yaml.safe_load(payload.content)
         except yaml.YAMLError as e:
@@ -30,7 +29,6 @@ async def upload_deployment_yaml_content(
                 status_code=400, detail=f"Invalid YAML format: {str(e)}"
             )
 
-        # Extract the model name from metadata
         model_name = deployment_yaml.get("metadata", {}).get("name")
         if not model_name:
             raise HTTPException(
@@ -38,7 +36,6 @@ async def upload_deployment_yaml_content(
                 detail="YAML must contain metadata.name field for the deployment name",
             )
 
-        # Create a temporary file to write the YAML content
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", delete=False
         ) as temp_file:
@@ -46,7 +43,6 @@ async def upload_deployment_yaml_content(
             temp_file_path = temp_file.name
 
         try:
-            # Upload the temporary file to S3
             success = aws_manager.upload_deployment_yaml(temp_file_path)
             if not success:
                 raise HTTPException(
@@ -57,7 +53,6 @@ async def upload_deployment_yaml_content(
                 "key": f"{model_name}.yaml",
             }
         finally:
-            # Clean up the temporary file
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
