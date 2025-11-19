@@ -1,5 +1,6 @@
 import logging
 import time
+import re
 from typing import Dict, List, Optional
 from kubernetes import client, config
 from kubernetes.client import ApiException
@@ -31,6 +32,36 @@ class KubeManager:
         self.KServe_VERSION = app_config.KSERVE_VERSION
         self.KServe_PLURAL = app_config.KSERVE_PLURAL
         self.hostname = app_config.HOSTNAME
+        self.gateway_name = app_config.GATEWAY_NAME
+        self.gateway_namespace = app_config.GATEWAY_NAMESPACE
+
+    @staticmethod
+    def _to_resource_name(raw: str) -> str:
+        """
+        Normalize an arbitrary model name into a valid Kubernetes resource name.
+
+        Rules (to satisfy regex '[a-z]([-a-z0-9]*[a-z0-9])?'):
+        - Lowercase everything
+        - Replace any char not in [a-z0-9-] with '-'
+        - Ensure it starts with a letter (prefix with 'm-' if needed)
+        - Strip leading/trailing '-' and ensure it does not end with '-'
+        - Truncate to 63 chars (DNS label limit) and make sure we don't end on '-'
+        """
+        if not raw:
+            return "model"
+        name = raw.strip().lower()
+        name = re.sub(r"[^a-z0-9-]+", "-", name)
+        name = name.strip("-")
+        if not name or not re.match(r"^[a-z]", name):
+            name = f"m-{name}"
+        name = re.sub(r"-+$", "", name)
+        if not name:
+            name = "model"
+        if len(name) > 63:
+            name = name[:63].rstrip("-")
+        if not name:
+            name = "model"
+        return name
 
     def _ensure_inferenceservice(self, obj: dict) -> dict:
         meta = obj.setdefault("metadata", {})
@@ -147,97 +178,106 @@ class KubeManager:
                 )
                 return False
 
-    async def deploy_inference_service(
-        self, model_name: str, semoss_id: str, wait: bool = True
-    ):
-        self.logger.info(
-            f"Deploying inference service for model={model_name}, semoss_id={semoss_id}"
-        )
-
-        obj = self.aws.read_deployment_yaml(f"{model_name}.yaml")
-        if not obj:
-            self.logger.error(f"Deployment YAML for model {model_name} not found.")
-            return False
-
-        if not isinstance(obj, dict):
-            self.logger.error(
-                f"Expected dict from AWSManager, got {type(obj).__name__}"
-            )
-            return False
-
-        if obj.get("kind") != "InferenceService":
-            self.logger.error("Provided YAML is not an InferenceService.")
-            return False
-
-        meta = obj.setdefault("metadata", {})
-        name = meta.get("name", None)
-        if not name:
-            self.logger.error("InferenceService metadata.name missing.")
-            return False
-
-        # If you provide a different namespace in the deployment I will honor it I guess..
-        self.namespace = obj.get("metadata", {}).get("namespace", self.namespace)
-
-        labels = meta.setdefault("labels", {})
-        labels.setdefault("app", "semoss")
-        labels["semoss_id"] = semoss_id
-        annotations = meta.setdefault("annotations", {})
-        annotations.setdefault("managed-by", "fastapi-kserve-launcher")
-
-        try:
-            self._ensure_inferenceservice(obj)
-        except ApiException as e:
-            self.logger.exception(f"KServe apply failed: {e}")
-            return False
-
-        if wait:
-            return self._wait_ready(name=name)
-        return True
-
-    async def delete_inference_service(
+    def _ensure_httproute(
         self,
-        name: str,
-        namespace: str = None,
-        wait: bool = True,
-        timeout_sec: int = 300,
-        poll_sec: int = 3,
-    ) -> bool:
+        route_name: str,
+        path_prefix: str,
+        service_name: str,
+        namespace: Optional[str] = None,
+    ) -> dict:
         """
-        Delete an InferenceService, equivalent to:
-            kubectl delete inferenceservice <name> -n <namespace>
+        Ensure an HTTPRoute exists for a given service + path.
+        If it already exists, just return it (no delete).
+        """
+        group = "gateway.networking.k8s.io"
+        version = "v1"
+        plural = "httproutes"
 
-        If wait=True, block until the resource is actually gone (404).
-        """
         ns = namespace or self.namespace
 
-        self.logger.info(f"Deleting InferenceService {name} in ns {ns}")
         try:
-            self.custom.delete_namespaced_custom_object(
-                group=self.KServe_GROUP,
-                version=self.KServe_VERSION,
+            existing = self.custom.get_namespaced_custom_object(
+                group=group,
+                version=version,
                 namespace=ns,
-                plural=self.KServe_PLURAL,
-                name=name,
+                plural=plural,
+                name=route_name,
             )
+            self.logger.info(
+                f"HTTPRoute {ns}/{route_name} already exists; " "leaving it as-is"
+            )
+            return existing
         except ApiException as e:
-            if e.status == 404:
-                self.logger.warning(
-                    f"InferenceService {name} in ns {ns} not found; "
-                    "treating as already deleted"
+            if e.status != 404:
+                self.logger.exception(
+                    f"Error checking existing HTTPRoute {ns}/{route_name}: {e}"
                 )
-                return True
-            self.logger.exception(f"Failed to delete InferenceService {name}: {e}")
-            return False
+                raise
 
-        if not wait:
-            return True
+        body = {
+            "apiVersion": f"{group}/{version}",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "name": route_name,
+                "namespace": ns,
+            },
+            "spec": {
+                "parentRefs": [
+                    {
+                        "name": self.gateway_name,
+                        "namespace": self.gateway_namespace,
+                    }
+                ],
+                "hostnames": [self.hostname] if self.hostname else [],
+                "rules": [
+                    {
+                        "matches": [
+                            {
+                                "path": {
+                                    "type": "PathPrefix",
+                                    "value": path_prefix,
+                                }
+                            }
+                        ],
+                        "filters": [
+                            {
+                                "type": "URLRewrite",
+                                "urlRewrite": {
+                                    "path": {
+                                        "type": "ReplacePrefixMatch",
+                                        "replacePrefixMatch": "/",
+                                    }
+                                },
+                            }
+                        ],
+                        "backendRefs": [
+                            {
+                                "kind": "Service",
+                                "name": service_name,
+                                "port": 80,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
 
-        return self._wait_deleted(
-            name=name,
-            namespace=ns,
-            timeout_sec=timeout_sec,
-            poll_sec=poll_sec,
-        )
+        try:
+            self.logger.info(
+                f"Creating HTTPRoute {route_name} in ns {ns} "
+                f"for service {service_name} path_prefix={path_prefix}"
+            )
+            created = self.custom.create_namespaced_custom_object(
+                group=group,
+                version=version,
+                namespace=ns,
+                plural=plural,
+                body=body,
+            )
+            return created
+        except ApiException as e:
+            self.logger.exception(f"Failed to create HTTPRoute {ns}/{route_name}: {e}")
+            raise
 
     def list_http_routes(
         self,
@@ -304,3 +344,115 @@ class KubeManager:
             )
 
         return routes
+
+    def deploy_inference_service(
+        self, model_name: str, semoss_id: str, wait: bool = True
+    ):
+        self.logger.info(
+            f"Deploying inference service for model={model_name}, semoss_id={semoss_id}"
+        )
+
+        obj = self.aws.read_deployment_yaml(f"{model_name}.yaml")
+        if not obj:
+            self.logger.error(f"Deployment YAML for model {model_name} not found.")
+            return False
+
+        if not isinstance(obj, dict):
+            self.logger.error(
+                f"Expected dict from AWSManager, got {type(obj).__name__}"
+            )
+            return False
+
+        if obj.get("kind") != "InferenceService":
+            self.logger.error("Provided YAML is not an InferenceService.")
+            return False
+
+        meta = obj.setdefault("metadata", {})
+        name = meta.get("name", None)
+        if not name:
+            self.logger.error("InferenceService metadata.name missing.")
+            return False
+
+        name = self._to_resource_name(name)
+        meta["name"] = name
+
+        # If you provide a different namespace in the deployment I will honor it I guess..
+        self.namespace = obj.get("metadata", {}).get("namespace", self.namespace)
+
+        labels = meta.setdefault("labels", {})
+        labels.setdefault("app", "semoss")
+        labels["semoss_id"] = semoss_id
+        annotations = meta.setdefault("annotations", {})
+        annotations.setdefault("managed-by", "fastapi-kserve-launcher")
+
+        try:
+            self._ensure_inferenceservice(obj)
+        except ApiException as e:
+            self.logger.exception(f"KServe apply failed: {e}")
+            return False
+
+        route_name = f"{name}-route"
+        path_prefix = f"/{model_name}"
+        service_name = f"{name}-predictor"
+
+        try:
+            self._ensure_httproute(
+                route_name=route_name,
+                path_prefix=path_prefix,
+                service_name=service_name,
+                namespace=self.namespace,
+            )
+        except ApiException:
+            self.logger.error(f"Failed to ensure HTTPRoute for InferenceService {name}")
+            return False
+
+        if wait:
+            return self._wait_ready(name=name)
+        return True
+
+    def delete_inference_service(
+        self,
+        name: str,
+        namespace: str = None,
+        wait: bool = True,
+        timeout_sec: int = 300,
+        poll_sec: int = 3,
+    ) -> bool:
+        """
+        Delete an InferenceService, equivalent to:
+            kubectl delete inferenceservice <name> -n <namespace>
+
+        If wait=True, block until the resource is actually gone (404).
+        """
+        ns = namespace or self.namespace
+
+        name = self._to_resource_name(name)
+
+        self.logger.info(f"Deleting InferenceService {name} in ns {ns}")
+        try:
+            self.custom.delete_namespaced_custom_object(
+                group=self.KServe_GROUP,
+                version=self.KServe_VERSION,
+                namespace=ns,
+                plural=self.KServe_PLURAL,
+                name=name,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                self.logger.warning(
+                    f"InferenceService {name} in ns {ns} not found; "
+                    "treating as already deleted"
+                )
+                return True
+            self.logger.exception(f"Failed to delete InferenceService {name}: {e}")
+            return False
+
+        if not wait:
+            return True
+
+        return self._wait_deleted(
+            name=name,
+            namespace=ns,
+            timeout_sec=timeout_sec,
+            poll_sec=poll_sec,
+        )

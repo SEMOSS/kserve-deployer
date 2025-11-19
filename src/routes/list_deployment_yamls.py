@@ -5,7 +5,7 @@ router = APIRouter()
 
 
 @router.post("/list-deployment-yamls")
-async def list_deployment_yamls(aws_manager: AWSManager = Depends()) -> dict:
+def list_deployment_yamls(aws_manager: AWSManager = Depends()) -> dict:
     try:
         files = aws_manager.list_deployment_yamls()
         return {"deployments": files}

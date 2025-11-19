@@ -6,7 +6,7 @@ router = APIRouter()
 
 
 @router.get("/http-routes")
-async def list_http_routes(
+def list_http_routes(
     namespace: Optional[str] = None, kube_manager: KubeManager = Depends()
 ) -> List[HTTPRouteInfo]:
     try:

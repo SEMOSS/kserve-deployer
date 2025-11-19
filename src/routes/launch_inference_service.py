@@ -6,8 +6,8 @@ km = KubeManager(in_cluster=False)
 
 
 @router.post("/deploy/{model_name}")
-async def deploy(model_name: str, semoss_id: str, wait: bool = True):
-    ok = await km.deploy_inference_service(
+def deploy(model_name: str, semoss_id: str, wait: bool = True):
+    ok = km.deploy_inference_service(
         model_name=model_name, semoss_id=semoss_id, wait=wait
     )
     if not ok:

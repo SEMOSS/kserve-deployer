@@ -13,7 +13,7 @@ class YamlContentUpload(BaseModel):
 
 
 @router.post("/upload-yaml-content")
-async def upload_deployment_yaml_content(
+def upload_deployment_yaml_content(
     payload: YamlContentUpload, aws_manager: AWSManager = Depends()
 ) -> dict:
     """

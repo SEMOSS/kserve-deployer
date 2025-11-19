@@ -13,9 +13,12 @@ class Config(BaseModel):
     KSERVE_VERSION: str
     KSERVE_PLURAL: str
     HOSTNAME: str
+    GATEWAY_NAME: str
+    GATEWAY_NAMESPACE: str
 
 
 load_dotenv()
+
 config = Config(
     MODEL_NAMESPACE=os.getenv("MODEL_NAMESPACE", "huggingface"),
     API_VERSION=os.getenv("API_VERSION", "0.16"),
@@ -24,4 +27,6 @@ config = Config(
     KSERVE_VERSION=os.getenv("KSERVE_VERSION", "v1beta1"),
     KSERVE_PLURAL=os.getenv("KSERVE_PLURAL", "inferenceservices"),
     HOSTNAME=os.getenv("HOSTNAME", "demo.semoss.org"),
+    GATEWAY_NAME=os.getenv("GATEWAY_NAME", "kserve-ingress-gateway"),
+    GATEWAY_NAMESPACE=os.getenv("GATEWAY_NAMESPACE", "kserve"),
 )

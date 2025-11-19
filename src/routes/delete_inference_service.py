@@ -6,14 +6,14 @@ km = KubeManager(in_cluster=False)
 
 
 @router.post("/delete/{model_name}")
-async def delete(
+def delete(
     model_name: str,
     namespace: str = None,
     wait: bool = True,
     timeout_sec: int = 300,
     poll_sec: int = 3,
 ):
-    ok = await km.delete_inference_service(
+    ok = km.delete_inference_service(
         name=model_name,
         namespace=namespace,
         wait=wait,

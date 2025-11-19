@@ -6,9 +6,7 @@ router = APIRouter()
 
 
 @router.get("/subnets/{vpc_id}")
-async def list_subnets(
-    vpc_id: str, aws_manager: AWSManager = Depends()
-) -> List[SubnetInfo]:
+def list_subnets(vpc_id: str, aws_manager: AWSManager = Depends()) -> List[SubnetInfo]:
     try:
         subnets = aws_manager.list_subnets(vpc_id)
         return subnets

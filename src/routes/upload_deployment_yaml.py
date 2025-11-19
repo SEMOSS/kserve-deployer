@@ -5,9 +5,7 @@ router = APIRouter()
 
 
 @router.post("/upload")
-async def upload_deployment_yaml(
-    yaml_path: str, aws_manager: AWSManager = Depends()
-) -> dict:
+def upload_deployment_yaml(yaml_path: str, aws_manager: AWSManager = Depends()) -> dict:
     try:
         success = aws_manager.upload_deployment_yaml(yaml_path)
         if not success:
