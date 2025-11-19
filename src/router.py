@@ -15,6 +15,7 @@ from src.routes.launch_inference_service import (
 from src.routes.delete_inference_service import (
     router as delete_inference_service_router,
 )
+from src.routes.list_http_routes import router as list_http_routes_router
 
 router = APIRouter()
 
@@ -26,6 +27,7 @@ router.include_router(read_deployment_yaml_router, prefix="/api")
 router.include_router(read_all_deployment_yamls_router, prefix="/api")
 router.include_router(launch_inference_service_router, prefix="/api")
 router.include_router(delete_inference_service_router, prefix="/api")
+router.include_router(list_http_routes_router, prefix="/api")
 
 
 @router.get("/api/health")

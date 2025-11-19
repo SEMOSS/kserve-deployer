@@ -7,11 +7,12 @@ class Config(BaseModel):
     """Configuration settings for the application"""
 
     MODEL_NAMESPACE: str
-    API_VERSION: str = "0.16"
-    BUCKET_NAME: str = "kserve-deployments"
-    KSERVE_GROUP: str = "serving.kserve.io"
-    KSERVE_VERSION: str = "v1beta1"
-    KSERVE_PLURAL: str = "inferenceservices"
+    API_VERSION: str
+    BUCKET_NAME: str
+    KSERVE_GROUP: str
+    KSERVE_VERSION: str
+    KSERVE_PLURAL: str
+    HOSTNAME: str
 
 
 load_dotenv()
@@ -22,4 +23,5 @@ config = Config(
     KSERVE_GROUP=os.getenv("KSERVE_GROUP", "serving.kserve.io"),
     KSERVE_VERSION=os.getenv("KSERVE_VERSION", "v1beta1"),
     KSERVE_PLURAL=os.getenv("KSERVE_PLURAL", "inferenceservices"),
+    HOSTNAME=os.getenv("HOSTNAME", "demo.semoss.org"),
 )

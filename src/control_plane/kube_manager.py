@@ -1,10 +1,18 @@
 import logging
 import time
+from typing import Dict, List, Optional
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from kubernetes.watch import Watch
+from pydantic import BaseModel
 from src.config.config import config as app_config
 from src.aws.aws_manager import AWSManager
+
+
+class HTTPRouteInfo(BaseModel):
+    name: str
+    namespace: Optional[str] = None
+    paths: List[str]
 
 
 class KubeManager:
@@ -22,6 +30,7 @@ class KubeManager:
         self.KServe_GROUP = app_config.KSERVE_GROUP
         self.KServe_VERSION = app_config.KSERVE_VERSION
         self.KServe_PLURAL = app_config.KSERVE_PLURAL
+        self.hostname = app_config.HOSTNAME
 
     def _ensure_inferenceservice(self, obj: dict) -> dict:
         meta = obj.setdefault("metadata", {})
@@ -229,3 +238,69 @@ class KubeManager:
             timeout_sec=timeout_sec,
             poll_sec=poll_sec,
         )
+
+    def list_http_routes(
+        self,
+        namespace: Optional[str] = None,
+        hostname: Optional[str] = None,
+    ) -> List[HTTPRouteInfo]:
+        group = "gateway.networking.k8s.io"
+        version = "v1"
+        plural = "httproutes"
+
+        effective_ns = namespace if namespace is not None else self.namespace
+        effective_hostname = hostname if hostname is not None else self.hostname
+
+        try:
+            self.logger.info(
+                f"Listing HTTPRoute resources in namespace '{effective_ns}'"
+            )
+            resp = self.custom.list_namespaced_custom_object(
+                group=group,
+                version=version,
+                namespace=effective_ns,
+                plural=plural,
+            )
+        except ApiException as e:
+            self.logger.exception(f"Failed to list HTTPRoute resources: {e}")
+            return []
+
+        items = resp.get("items", []) or []
+        routes: List[HTTPRouteInfo] = []
+
+        for item in items:
+            metadata = item.get("metadata", {}) or {}
+            spec = item.get("spec", {}) or {}
+
+            route_name = metadata.get("name")
+            route_ns = metadata.get("namespace")
+
+            hostnames = spec.get("hostnames", []) or []
+            if effective_hostname:
+                if effective_hostname not in hostnames:
+                    self.logger.debug(
+                        f"Skipping HTTPRoute {route_ns}/{route_name} "
+                        f"because its hostnames {hostnames} do not include "
+                        f"{effective_hostname}"
+                    )
+                    continue
+
+            paths_set = set()
+            for rule in spec.get("rules", []) or []:
+                for match in rule.get("matches", []) or []:
+                    path_obj = match.get("path") or {}
+                    value = path_obj.get("value")
+                    if value:
+                        paths_set.add(value)
+
+            paths_list = sorted(paths_set)
+            self.logger.info(
+                f"HTTPRoute {route_ns}/{route_name} "
+                f"hostnames={hostnames or '<none>'} "
+                f"paths={', '.join(paths_list) if paths_list else '<no paths>'}"
+            )
+            routes.append(
+                HTTPRouteInfo(name=route_name, namespace=route_ns, paths=paths_list)
+            )
+
+        return routes
