@@ -115,9 +115,8 @@ class AWSManager:
         Deletes a deployment YAML file from the S3 bucket.
         """
         try:
-            self.s3_client.delete_object(
-                Bucket=config.BUCKET_NAME, Key=f"{model_name}.yaml"
-            )
+            print(f"Deleting {model_name} from S3 bucket {config.BUCKET_NAME}")
+            self.s3_client.delete_object(Bucket=config.BUCKET_NAME, Key=model_name)
             return True
         except ClientError as e:
             self.logger.error(f"Failed to delete {model_name}.yaml from S3: {e}")
