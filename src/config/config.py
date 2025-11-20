@@ -15,6 +15,9 @@ class Config(BaseModel):
     HOSTNAME: str
     GATEWAY_NAME: str
     GATEWAY_NAMESPACE: str
+    MODEL_PVC_NAME: str
+    MODEL_PVC_BASE_PATH: str
+    MODEL_SUBDIR: str
 
 
 load_dotenv()
@@ -29,4 +32,7 @@ config = Config(
     HOSTNAME=os.getenv("HOSTNAME", "demo.semoss.org"),
     GATEWAY_NAME=os.getenv("GATEWAY_NAME", "kserve-ingress-gateway"),
     GATEWAY_NAMESPACE=os.getenv("GATEWAY_NAMESPACE", "kserve"),
+    MODEL_PVC_NAME=os.getenv("MODEL_PVC_NAME", "kserve-model-store-pvc"),
+    MODEL_PVC_BASE_PATH=os.getenv("MODEL_PVC_BASE_PATH", "/mnt/pvc"),
+    MODEL_SUBDIR=os.getenv("MODEL_SUBDIR", "models"),
 )

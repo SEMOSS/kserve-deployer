@@ -1,9 +1,9 @@
 import logging
 import time
 import re
-from typing import Dict, List, Optional
+from typing import List, Optional
 from kubernetes import client, config
-from kubernetes.client import ApiException
+from kubernetes.client import ApiException, BatchV1Api
 from kubernetes.watch import Watch
 from pydantic import BaseModel
 from src.config.config import config as app_config
@@ -26,6 +26,7 @@ class KubeManager:
 
         self.core = client.CoreV1Api()
         self.custom = client.CustomObjectsApi()
+        self.batch = BatchV1Api()
         self.aws = AWSManager()
         self.namespace = app_config.MODEL_NAMESPACE
         self.KServe_GROUP = app_config.KSERVE_GROUP
@@ -34,6 +35,9 @@ class KubeManager:
         self.hostname = app_config.HOSTNAME
         self.gateway_name = app_config.GATEWAY_NAME
         self.gateway_namespace = app_config.GATEWAY_NAMESPACE
+        self.model_pvc_name = app_config.MODEL_PVC_NAME
+        self.model_pvc_base_path = app_config.MODEL_PVC_BASE_PATH
+        self.model_subdir = app_config.MODEL_SUBDIR
 
     @staticmethod
     def _to_resource_name(raw: str) -> str:
@@ -456,3 +460,130 @@ class KubeManager:
             timeout_sec=timeout_sec,
             poll_sec=poll_sec,
         )
+
+    def download_model_to_pvc(
+        self,
+        model_name: str,
+        hf_repo_id: str,
+        timeout_sec: int = 3600,
+    ) -> bool:
+        """
+        Launch a Kubernetes Job that downloads a HuggingFace model onto the shared PVC.
+
+        - model_name: logical name used in KServe (e.g. 'arch-function-3b')
+        - hf_repo_id: HuggingFace repo id (e.g. 'nomic-ai/nomic-embed-text-v1.5')
+        - pvc_name: overrides default PVC name from config if provided
+        """
+        pvc_name = self.model_pvc_name
+
+        safe_name = self._to_resource_name(model_name)
+        job_name = f"download-{safe_name}-{int(time.time())}"
+
+        mount_path = self.model_pvc_base_path  # e.g. /mnt/pvc
+        model_subdir = self.model_subdir  # e.g. models
+        target_path = f"{mount_path}/{model_subdir}/{safe_name}"
+
+        job_manifest = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": job_name,
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "backoffLimit": 1,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [
+                            {
+                                "name": "download-model",
+                                "image": "python:3.11-slim",
+                                "command": ["bash", "-lc"],
+                                "args": [
+                                    f"""
+                                    set -euxo pipefail
+                                    pip install --no-cache-dir 'huggingface_hub>=0.23.0'
+                                    mkdir -p {target_path}
+                                    python - << 'EOF'
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id="{hf_repo_id}",
+    local_dir="{target_path}",
+    local_dir_use_symlinks=False
+)
+EOF
+                                    """
+                                ],
+                                "volumeMounts": [
+                                    {
+                                        "name": "model-store",
+                                        "mountPath": mount_path,
+                                    }
+                                ],
+                                # if you need HF token, add env here from Secret:
+                                # "env": [
+                                #     {
+                                #         "name": "HF_TOKEN",
+                                #         "valueFrom": {
+                                #             "secretKeyRef": {
+                                #                 "name": "huggingface-token",
+                                #                 "key": "token",
+                                #             }
+                                #         },
+                                #     }
+                                # ],
+                            }
+                        ],
+                        "volumes": [
+                            {
+                                "name": "model-store",
+                                "persistentVolumeClaim": {
+                                    "claimName": pvc_name,
+                                },
+                            }
+                        ],
+                    }
+                },
+            },
+        }
+
+        self.logger.info(
+            f"Creating Job {job_name} in ns {self.namespace} to download "
+            f"HF repo '{hf_repo_id}' into PVC '{pvc_name}' at {target_path}"
+        )
+
+        try:
+            self.batch.create_namespaced_job(
+                namespace=self.namespace, body=job_manifest
+            )
+        except ApiException as e:
+            self.logger.exception(f"Failed to create download Job {job_name}: {e}")
+            return False
+
+        # Wait for completion
+        start = time.time()
+        while True:
+            if time.time() - start > timeout_sec:
+                self.logger.error(
+                    f"Timed out waiting for download Job {job_name} to complete"
+                )
+                return False
+
+            try:
+                job = self.batch.read_namespaced_job(
+                    name=job_name, namespace=self.namespace
+                )
+            except ApiException as e:
+                self.logger.exception(f"Error reading Job status for {job_name}: {e}")
+                return False
+
+            status = job.status
+            if status.succeeded and status.succeeded >= 1:
+                self.logger.info(f"Download Job {job_name} succeeded")
+                return True
+            if status.failed and status.failed >= 1:
+                self.logger.error(f"Download Job {job_name} failed")
+                return False
+
+            time.sleep(5)

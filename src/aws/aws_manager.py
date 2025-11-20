@@ -12,6 +12,7 @@ class SubnetInfo(BaseModel):
     SubnetId: str
     CidrBlock: str
     AvailableIpAddressCount: int
+    AvailabilityZone: str
 
 
 class AWSManager:
@@ -33,6 +34,7 @@ class AWSManager:
                 SubnetId=subnet["SubnetId"],
                 CidrBlock=subnet["CidrBlock"],
                 AvailableIpAddressCount=subnet["AvailableIpAddressCount"],
+                AvailabilityZone=subnet["AvailabilityZone"],
             )
             subnets_info.append(subnet_info)
         return subnets_info
@@ -107,3 +109,16 @@ class AWSManager:
             if yaml_content:
                 yamls[key] = yaml_content
         return yamls
+
+    def delete_deployment_yaml(self, model_name: str) -> bool:
+        """
+        Deletes a deployment YAML file from the S3 bucket.
+        """
+        try:
+            self.s3_client.delete_object(
+                Bucket=config.BUCKET_NAME, Key=f"{model_name}.yaml"
+            )
+            return True
+        except ClientError as e:
+            self.logger.error(f"Failed to delete {model_name}.yaml from S3: {e}")
+            return False
